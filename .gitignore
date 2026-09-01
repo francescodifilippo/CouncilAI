@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Debate output — transcripts are per-run artifacts, not source
+transcripts/
+*.jsonl
+
+# Local configuration and secrets
+config/*.local.yaml
+.env
+certs/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

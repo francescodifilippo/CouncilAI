@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Design history and rejected findings
+    url: https://github.com/francescodifilippo/CouncilAI/blob/main/SPECIFICATION.md
+    about: Appendix C records which findings were accepted, downgraded or rejected, and why. Worth reading before arguing with a decision.

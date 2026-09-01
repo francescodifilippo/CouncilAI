@@ -1,0 +1,86 @@
+# Consilium — Phase 0 debate configuration
+#
+# Phase 0 runs everything in one process: no Arbiter, no sockets, no TLS.
+# See SPECIFICATION.md §18 for what each later phase adds.
+
+topic: >
+  Should we rewrite the billing service from scratch, or wrap the existing
+  one behind a new interface? Constraints: one team, one quarter, no
+  downtime window longer than 15 minutes.
+
+# Whether role labels are shown to the other participants.
+#   true  — declared council: every seat knows who it is talking to
+#   false — blind debate: arguments are judged on their merits
+# Session-wide by design: either all roles are declared, or none. (§5.3)
+role_visible: true
+
+# Turn order policy. Phase 0 implements round_robin and least_recently_spoken.
+turn_policy: round_robin
+
+# Debate phases are moderator commands, not automation (§13.3).
+# This is the phase the debate opens in.
+phase: OPENING
+
+# The cost cap is the only mandatory automatic stop (§5.7, §17.10).
+# A debate halted here is recorded as STOPPED_BY_CAP, not FINISHED.
+cap:
+  max_rounds: 6
+  max_tokens: 200000
+  max_seconds: 3600
+
+transcript_dir: transcripts
+
+participants:
+  # ---------------------------------------------------------------- human --
+  - name: moderator
+    adapter: human
+    role_label: moderator
+    # Seconds to wait for input before the turn is skipped. null disables the
+    # timeout; the Arbiter-side deadline of §5.4 arrives in Phase 2.
+    timeout_s: 30
+
+  # -------------------------------------------------------- CLI via pexpect --
+  # The universal adapter: anything with a TTY. The command is spawned once
+  # and the session stays open, so the CLI keeps its own history and compacts
+  # its own context.
+  - name: claude_sonnet_deep
+    adapter: pexpect
+    role_prompt_file: roles/sceptic.txt
+    role_label: sceptic
+    meta: { brand: claude, model: sonnet, effort: deep }
+    command: "claude"
+    # Regex the adapter waits for before considering the CLI ready for input.
+    ready_pattern: '❯ |> '
+    reply_timeout_s: 180
+
+  - name: qwen_coder
+    adapter: pexpect
+    role_prompt_file: roles/pragmatist.txt
+    role_label: pragmatist
+    meta: { brand: qwen, model: coder, effort: default }
+    command: "qwen"
+    ready_pattern: '> '
+    reply_timeout_s: 180
+
+  # ------------------------------------------------- OpenAI-compatible API --
+  # For models with no subscription-backed CLI. The wrapper keeps the history.
+  # api_key_env names an environment variable; keys never live in this file.
+  - name: gateway_devil
+    adapter: api
+    role_prompt_file: roles/devils-advocate.txt
+    role_label: devil's advocate
+    meta: { brand: openrouter, model: "some/model", effort: default }
+    base_url: https://openrouter.ai/api/v1
+    model: "some/model"
+    api_key_env: OPENROUTER_API_KEY
+    max_output_tokens: 700
+
+# Optional: run a synthesis pass over the transcript when the debate ends.
+# Not a participant — no seat, no turns (§13.4).
+synthesis:
+  enabled: false
+  adapter: api
+  role_prompt_file: roles/synthesist.txt
+  base_url: https://openrouter.ai/api/v1
+  model: "some/model"
+  api_key_env: OPENROUTER_API_KEY
