@@ -18,6 +18,7 @@ worth reading". If they are not, the project should stop here.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,8 +34,55 @@ from .adapters import (
 from .prompts import Contribution, assemble_context, build_system_prompt
 from .status import Cap, Status, repetition_index
 from .transcript import Transcript, role_prompt_hash
+from .wrappers import resolve_wrapper
 
 PHASES = ("OPENING", "REBUTTAL", "CLOSING")
+TURN_POLICIES = ("round_robin", "least_recently_spoken")
+
+
+def _validate_config(config: dict[str, Any]) -> None:
+    topic = config.get("topic")
+    if not isinstance(topic, str) or not topic.strip():
+        raise ValueError("'topic' must be a non-empty string")
+
+    participants = config.get("participants")
+    if not isinstance(participants, list) or not participants:
+        raise ValueError("'participants' must be a non-empty list")
+    names: list[str] = []
+    for index, participant in enumerate(participants):
+        if not isinstance(participant, dict):
+            raise ValueError(f"participant {index} must be a mapping")
+        name = participant.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"participant {index} needs a non-empty 'name'")
+        names.append(name.strip())
+    if len(names) != len(set(names)):
+        raise ValueError("participant names must be unique")
+
+    phase = str(config.get("phase", "OPENING")).upper()
+    if phase not in PHASES:
+        raise ValueError(f"'phase' must be one of {', '.join(PHASES)}")
+    policy = str(config.get("turn_policy", "round_robin")).lower()
+    if policy not in TURN_POLICIES:
+        raise ValueError(f"'turn_policy' must be one of {', '.join(TURN_POLICIES)}")
+    if "role_visible" in config and not isinstance(config["role_visible"], bool):
+        raise ValueError("'role_visible' must be true or false")
+
+    cap = config.get("cap")
+    if not isinstance(cap, dict):
+        raise ValueError("'cap' must define at least one positive limit")
+    limits = {name: cap.get(name) for name in ("max_rounds", "max_tokens", "max_seconds")}
+    if all(value is None for value in limits.values()):
+        raise ValueError("'cap' must define max_rounds, max_tokens or max_seconds")
+    for name, value in limits.items():
+        expected = (int, float) if name == "max_seconds" else int
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, expected)
+            or value <= 0
+            or (name == "max_seconds" and not math.isfinite(value))
+        ):
+            raise ValueError(f"cap.{name} must be a positive number")
 
 
 @dataclass
@@ -54,6 +102,7 @@ class Seat:
     seen_upto: int = 0
     own_turns: list[str] = field(default_factory=list)
     last_spoke_at: int = -1
+    last_selected_at: int = -1
 
     @property
     def is_human(self) -> bool:
@@ -70,11 +119,12 @@ class Seat:
 
 class Debate:
     def __init__(self, config: dict[str, Any], *, root: Path) -> None:
+        _validate_config(config)
         self.root = root
         self.topic: str = config["topic"].strip()
         self.role_visible: bool = bool(config.get("role_visible", True))
-        self.turn_policy: str = config.get("turn_policy", "round_robin")
-        self.phase: str = config.get("phase", "OPENING")
+        self.turn_policy: str = str(config.get("turn_policy", "round_robin")).lower()
+        self.phase: str = str(config.get("phase", "OPENING")).upper()
 
         cap_cfg = config.get("cap") or {}
         self.cap = Cap(
@@ -83,7 +133,19 @@ class Debate:
             max_seconds=cap_cfg.get("max_seconds"),
         )
 
-        stamp = time.strftime("%Y%m%d-%H%M%S")
+        self.seats: list[Seat] = [self._build_seat(p) for p in config["participants"]]
+        if (
+            self.cap.max_tokens is not None
+            and self.cap.max_rounds is None
+            and self.cap.max_seconds is None
+            and not all(seat.adapter.reports_token_usage for seat in self.seats)
+        ):
+            raise ValueError(
+                "cap.max_tokens cannot be the only limit when an adapter does not "
+                "report token usage; add cap.max_rounds or cap.max_seconds"
+            )
+
+        stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns() % 1_000_000_000:09d}"
         out_dir = root / config.get("transcript_dir", "transcripts")
         self.transcript = Transcript(
             out_dir / f"debate-{stamp}.jsonl",
@@ -91,7 +153,6 @@ class Debate:
             role_visible=self.role_visible,
         )
 
-        self.seats: list[Seat] = [self._build_seat(p) for p in config["participants"]]
         self.log: list[tuple[str, Contribution]] = []  # (seat name, contribution)
         self.turn_counter = 0
         self.state = "RUNNING"
@@ -101,8 +162,9 @@ class Debate:
     # -- setup -------------------------------------------------------------
 
     def _build_seat(self, spec: dict[str, Any]) -> Seat:
+        spec = resolve_wrapper(spec)
         return Seat(
-            name=spec["name"],
+            name=spec["name"].strip(),
             adapter=build_adapter(spec, root=self.root),
             role_prompt=load_role_prompt(spec, root=self.root),
             role_label=spec.get("role_label"),
@@ -135,8 +197,10 @@ class Debate:
 
     def _next_seat(self) -> Seat:
         if self.turn_policy == "least_recently_spoken":
-            return min(self.seats, key=lambda s: s.last_spoke_at)
-        seat = self.seats[self._cursor % len(self.seats)]
+            seat = min(self.seats, key=lambda s: s.last_selected_at)
+        else:
+            seat = self.seats[self._cursor % len(self.seats)]
+        seat.last_selected_at = self._cursor
         self._cursor += 1
         return seat
 
@@ -163,14 +227,16 @@ class Debate:
 
         try:
             while self.state == "RUNNING":
+                if self._check_cap():
+                    break
                 seat = self._next_seat()
                 self._take_turn(seat)
 
+                if self.state != "RUNNING":
+                    break
                 if self._round_boundary():
                     self.cap.rounds += 1
-                    breached = self.cap.exceeded()
-                    if breached:
-                        self._end("STOPPED_BY_CAP", cap=breached)
+                self._check_cap()
         except KeyboardInterrupt:
             self._end("FINISHED", reason="interrupted_by_moderator")
         finally:
@@ -184,11 +250,10 @@ class Debate:
         return f"{seat.name}[{seat.role_label}]" if seat.role_label else seat.name
 
     def _take_turn(self, seat: Seat) -> None:
-        self._ensure_open(seat)
         self.turn_counter += 1
         turn_id = self.turn_counter
 
-        is_first = not seat.own_turns
+        is_first = not seat.own_turns or seat.joined_cold
         context = assemble_context(
             topic=self.topic,
             phase=self.phase,
@@ -202,6 +267,7 @@ class Debate:
             print(f"\n[turn {turn_id} — {self.phase}] {self._describe(seat)} …")
 
         try:
+            self._ensure_open(seat)
             result = seat.adapter.send_turn(context)
         except Exception as exc:  # a broken seat must not kill the council
             self.transcript.event(
@@ -209,11 +275,16 @@ class Debate:
             )
             print(f"[!] {seat.name} failed this turn: {exc}")
             seat.seen_upto = len(self.log)
+            if seat.adapter.memory_lost:
+                seat.opened = False
+                self._memory_lost(seat)
             return
 
         seat.seen_upto = len(self.log)
-        seat.last_spoke_at = turn_id
         seat.joined_cold = False
+        if seat.adapter.memory_lost:
+            seat.opened = False
+            self._memory_lost(seat)
         self.cap.add_tokens(result.tokens_in, result.tokens_out)
 
         if isinstance(seat.adapter, HumanAdapter) and seat.adapter.pending_command:
@@ -233,6 +304,7 @@ class Debate:
         contribution = Contribution(who=seat.name, role_label=seat.role_label, text=text)
         self.log.append((seat.name, contribution))
         seat.own_turns.append(text)
+        seat.last_spoke_at = turn_id
 
         self.transcript.turn(
             turn_id=turn_id,
@@ -281,6 +353,8 @@ class Debate:
                 print(self.status().render())
         elif cmd.verb == "end":
             self._end("FINISHED", reason="closed_by_moderator")
+        else:
+            print(f"[unknown command: /{cmd.verb}; use /help]")
 
     # -- status and ending -------------------------------------------------
 
@@ -312,7 +386,17 @@ class Debate:
         )
 
     def _end(self, outcome: str, **detail: Any) -> None:
+        if self.state != "RUNNING":
+            return
         self.state = outcome
         self.outcome = outcome
         self.transcript.ended(outcome, turn_counter=self.turn_counter, **detail)
         print(f"\n[debate ended: {outcome}" + (f" — {detail}" if detail else "") + "]")
+
+    def _check_cap(self) -> bool:
+        breached = self.cap.exceeded()
+        if not breached:
+            return False
+        self.transcript.event("CAP_REACHED", cap=breached)
+        self._end("STOPPED_BY_CAP", cap=breached)
+        return True

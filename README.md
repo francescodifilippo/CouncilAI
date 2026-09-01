@@ -4,8 +4,8 @@
 
 Consilium seats several AI participants — each running in its own commercial CLI, with its own persistent conversation — and one or more humans around a single table, and has them argue a topic in turns. A central Arbiter hands out turns; each participant keeps its own memory; a human moderator triggers the debate, steers it, and decides when it is over.
 
-> **Status: early. Phase 0 runs; nothing beyond it exists.**
-> The repository contains the full architectural specification and a working Phase 0 skeleton — one process, no Arbiter, no sockets, no TLS. [`SPECIFICATION.md`](SPECIFICATION.md) is normative for everything further along the roadmap.
+> **Status: early. Phase 0 runs, with a few Phase 1 controls prototyped in-process.**
+> There is no Arbiter, process isolation, socket protocol, TLS, dynamic seating or final synthesis yet. [`SPECIFICATION.md`](SPECIFICATION.md) is normative for everything further along the roadmap.
 
 ### A note on the spirit of this
 
@@ -116,6 +116,8 @@ The threat model is declared explicitly in [`SPECIFICATION.md` §14.1](SPECIFICA
 
 That thing is the sharpest point in the design. The orchestrated CLIs are **agents with shell, filesystem and network access**. If such a CLI shares a user, a filesystem or a network namespace with the wrapper that holds the credentials, then calling the wrapper "trusted" means nothing: the AI never needs to inject a command into the dialogue, because a shorter path exists. So OS-level isolation of the CLI — separate uid, no credentials on a readable path, no tools, restrictive network policy — is a hard requirement rather than a recommendation, and the last line of defence is *"the model has no tool"*, never *"the model was told not to"*.
 
+**Phase 0 does not enforce that isolation.** Native wrappers get an empty per-seat working directory, but still inherit the current user, environment and network; the TTY fallback may also inherit the caller's directory. Run this proof-of-value harness only in a disposable, unprivileged environment with no unrelated secrets; enforced OS isolation belongs to Phase 2.
+
 ---
 
 ## Roadmap
@@ -142,27 +144,41 @@ pip install -e ".[dev]"
 
 cp config/debate.example.yaml config/debate.yaml   # edit topic, seats, roles
 consilium roles                                    # list available role prompts
+consilium wrappers                                 # list built-in wrappers
 consilium run config/debate.yaml
 ```
 
 Two runtime dependencies, `pexpect` and `PyYAML`, and it is meant to stay that way — the API adapter uses `urllib` from the standard library on purpose, so adding a model never means adding a dependency.
 
-**Seating a participant.** Each seat picks its own transport:
+The initial wrapper roster is deliberately data-driven: compatible headless CLIs reuse `NativeAdapter`, while humans and API-only models reuse the existing adapters. There is no class per vendor.
+
+| Wrapper | Executable / interface | Important limit |
+|---|---|---|
+| `claude` | Claude Code headless | tools disabled; resumes the seat-local session |
+| `codex` | Codex `exec` | read-only sandbox and empty cwd; Codex has no strict no-tools flag |
+| `gemini` | Gemini CLI headless | current personal OAuth plans are unsupported; enterprise/API-key use only |
+| `human` | terminal stdin | local timeout or away mode |
+| `human-with-web-gui` | local HTML form | loopback-only, token-protected; no remote access |
+| `opencode` | OpenCode `run` | plan agent is not an OS security boundary |
+| `qwen-code` | Qwen Code headless | safe mode plus write/shell tool exclusions |
+| `kimi` | current Moonshot Kimi Code CLI | no strict headless no-tools switch |
+| `glm-code` | Claude Code against Z.AI | requires `ZAI_API_KEY`; there is no separate `glm-code` executable |
+| `deepseek.coder` | DeepSeek OpenAI-compatible API | uses `deepseek-v4-pro` and `DEEPSEEK_API_KEY`; Harness headless has no resume |
+
+**Seating a participant.** A built-in wrapper supplies transport defaults; any explicit field overrides the preset:
 
 ```yaml
 - name: claude_sonnet_deep
-  adapter: pexpect                        # any CLI with a TTY
-  command: "claude"
+  wrapper: claude
   role_prompt_file: roles/sceptic.txt
   role_label: sceptic
 
-- name: gateway_devil
-  adapter: api                            # OpenAI-compatible endpoint
-  base_url: https://openrouter.ai/api/v1
-  model: "some/model"
-  api_key_env: OPENROUTER_API_KEY
-  role_prompt_file: roles/devils-advocate.txt
+- name: moderator
+  wrapper: human-with-web-gui
+  port: 8765
 ```
+
+Low-level `adapter: native|pexpect|api|human|human_web` configuration remains available for custom clients.
 
 **During your turn** — Phase 0 stands in for the keybindings and the admin plane with a few slash commands, which never reach the debate content: `/status`, `/phase REBUTTAL`, `/inject <text>`, `/away`, `/back`, `/end`. An empty line skips your turn. Phase 2 replaces these with real keybindings and the ADMIN channel.
 
@@ -178,7 +194,7 @@ Transcripts land in `transcripts/` as JSONL, one record per turn, carrying model
 |---|---|
 | [`SPECIFICATION.md`](SPECIFICATION.md) | The v4 specification. Normative. Includes the full changelog, superseded decisions with rationale, the original v1 document (Appendix A), the version transitions (Appendix B), and the review outcome (Appendix C) |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to argue with the design, and the ground rules for code |
-| `src/consilium/` | Phase 0 implementation: adapters, debate loop, transcript, cap and status |
+| `src/consilium/` | In-process implementation: wrapper presets, adapters, debate loop, transcript, cap and status |
 | `roles/` | Reusable role prompts — sceptic, pragmatist, devil's advocate, historian, constraint keeper, synthesist |
 | `config/debate.example.yaml` | Annotated example configuration |
 | `tests/` | Phase 0 tests, using a stub adapter so they need no CLI, network or API key |

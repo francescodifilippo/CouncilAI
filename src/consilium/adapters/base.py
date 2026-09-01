@@ -34,6 +34,8 @@ class ParticipantAdapter(abc.ABC):
 
     #: Whether this transport needs the end-of-response sentinel in the prompt.
     needs_end_token: bool = False
+    #: Whether token counts are complete enough to enforce a token-only cap.
+    reports_token_usage: bool = False
 
     @abc.abstractmethod
     def open(self, system_prompt: str) -> None:

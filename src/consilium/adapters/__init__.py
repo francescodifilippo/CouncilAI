@@ -12,16 +12,19 @@ from typing import Any
 
 from .api_adapter import ApiAdapter
 from .base import ParticipantAdapter, TurnResult
-from .human import HumanAdapter, ModeratorCommand
+from .human import HumanAdapter, ModeratorCommand, WebHumanAdapter
+from .native import NativeAdapter
 from .pexpect_adapter import PexpectAdapter
 
 __all__ = [
     "ApiAdapter",
     "HumanAdapter",
     "ModeratorCommand",
+    "NativeAdapter",
     "ParticipantAdapter",
     "PexpectAdapter",
     "TurnResult",
+    "WebHumanAdapter",
     "build_adapter",
 ]
 
@@ -31,7 +34,16 @@ def build_adapter(spec: dict[str, Any], *, root: Path) -> ParticipantAdapter:
     kind = str(spec.get("adapter", "pexpect")).lower()
 
     if kind == "human":
-        return HumanAdapter(timeout_s=spec.get("timeout_s", 30.0))
+        timeout = spec.get("timeout_s", 30.0)
+        return HumanAdapter(timeout_s=timeout)
+
+    if kind == "human_web":
+        timeout = spec.get("timeout_s", 30.0)
+        return WebHumanAdapter(
+            timeout_s=timeout,
+            host=str(spec.get("host", "127.0.0.1")),
+            port=spec.get("port", 0),
+        )
 
     if kind == "pexpect":
         command = spec.get("command")
@@ -41,6 +53,26 @@ def build_adapter(spec: dict[str, Any], *, root: Path) -> ParticipantAdapter:
             command=command,
             ready_pattern=spec.get("ready_pattern", r"> "),
             reply_timeout_s=float(spec.get("reply_timeout_s", 180.0)),
+            startup_timeout_s=float(spec.get("startup_timeout_s", 60.0)),
+            encoding=str(spec.get("encoding", "utf-8")),
+        )
+
+    if kind == "native":
+        command = spec.get("command")
+        if not command:
+            raise ValueError(f"participant {spec.get('name')!r}: 'command' is required")
+        resume_command = spec.get("resume_command")
+        if not resume_command:
+            raise ValueError(
+                f"participant {spec.get('name')!r}: native adapters require "
+                "'resume_command'"
+            )
+        return NativeAdapter(
+            command=command,
+            resume_command=resume_command,
+            timeout_s=spec.get("reply_timeout_s", 180.0),
+            env=spec.get("env"),
+            env_from=spec.get("env_from"),
         )
 
     if kind == "api":
@@ -49,14 +81,10 @@ def build_adapter(spec: dict[str, Any], *, root: Path) -> ParticipantAdapter:
             model=spec["model"],
             api_key_env=spec.get("api_key_env", "OPENAI_API_KEY"),
             max_output_tokens=int(spec.get("max_output_tokens", 700)),
-        )
-
-    if kind == "native":
-        raise NotImplementedError(
-            "NativeAdapter arrives with Phase 1: it wraps clients that expose a "
-            "non-interactive mode with session resume, so the participant's memory "
-            "survives a process restart (SPECIFICATION.md §3.3.B, §5.5). "
-            "Use adapter: pexpect until then."
+            timeout_s=float(spec.get("reply_timeout_s", 180.0)),
+            temperature=(
+                None if spec.get("temperature") is None else float(spec["temperature"])
+            ),
         )
 
     raise ValueError(f"unknown adapter {kind!r}")

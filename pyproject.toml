@@ -14,7 +14,6 @@ license-files = ["LICENSE"]
 keywords = ["multi-agent", "debate", "orchestration", "llm", "cli"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
-    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3.11",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",

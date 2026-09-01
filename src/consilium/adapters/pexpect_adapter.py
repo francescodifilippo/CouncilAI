@@ -94,22 +94,37 @@ class PexpectAdapter(ParticipantAdapter):
         # prompt, spinners, status lines — so that `before` contains this
         # turn's answer and nothing else.
         self._drain()
+        if self._child is None:
+            raise RuntimeError("CLI process exited between turns")
 
         # Multi-line input through a TTY is where interactive parsers bite.
         # prompts.sanitise_contribution() has already prefixed every line with
         # a space so none can begin with a command character; collapsing to a
         # single line here removes the remaining ambiguity.
         payload = " ".join(line.strip() for line in text.splitlines() if line.strip())
-        self._child.sendline(payload)
+        try:
+            self._child.sendline(payload)
+        except (pexpect.EOF, OSError) as exc:
+            self._memory_lost = True
+            self._child = None
+            raise RuntimeError("CLI process exited before receiving the turn") from exc
 
         truncated = False
         try:
             self._child.expect(re.escape(END_OF_RESPONSE_TOKEN), timeout=self.reply_timeout_s)
-            raw = self._child.before
-            # Consume the prompt the CLI prints after the answer, so it does
-            # not reappear at the head of the next turn's capture.
-            with contextlib.suppress(pexpect.TIMEOUT, pexpect.EOF):
+            # Keep reading briefly through the next prompt. If the model
+            # quoted the token and later emitted the real one, _clean() can
+            # then split on the last occurrence instead of truncating early.
+            raw = (self._child.before or "") + END_OF_RESPONSE_TOKEN
+            try:
                 self._child.expect(self.ready_pattern, timeout=2)
+                raw += self._child.before or ""
+            except pexpect.TIMEOUT:
+                raw += self._child.before or ""
+            except pexpect.EOF:
+                raw += self._child.before or ""
+                self._memory_lost = True
+                self._child = None
         except pexpect.TIMEOUT:
             # The sentinel is best-effort; the timeout is the guarantee.
             raw = self._child.before or ""
@@ -134,16 +149,20 @@ class PexpectAdapter(ParticipantAdapter):
             try:
                 if not self._child.read_nonblocking(size=4096, timeout=0):
                     break
-            except (pexpect.TIMEOUT, pexpect.EOF, OSError, ValueError):
+            except pexpect.TIMEOUT:
+                break
+            except (pexpect.EOF, OSError, ValueError):
+                self._memory_lost = True
+                self._child = None
                 break
 
     @staticmethod
     def _clean(raw: str, ready_pattern: str = "") -> str:
         text = strip_ansi(normalise(raw or ""))
-        # Take everything after the LAST sentinel we may have swallowed, so a
-        # token quoted mid-answer cannot truncate the turn.
+        # The last sentinel ends the response; earlier occurrences may have
+        # been quoted as ordinary text and are removed below.
         if END_OF_RESPONSE_TOKEN in text:
-            text = text.rsplit(END_OF_RESPONSE_TOKEN, 1)[-1]
+            text = text.rsplit(END_OF_RESPONSE_TOKEN, 1)[0]
         text = text.replace(END_OF_RESPONSE_TOKEN, "")
 
         lines = [ln.rstrip() for ln in text.replace("\r", "").splitlines()]

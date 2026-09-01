@@ -31,56 +31,32 @@ cap:
 transcript_dir: transcripts
 
 participants:
-  # ---------------------------------------------------------------- human --
+  # `wrapper` selects a tested built-in preset. Run `consilium wrappers` for
+  # the complete initial roster; explicit fields below always override it.
   - name: moderator
-    adapter: human
+    wrapper: human
     role_label: moderator
     # Seconds to wait for input before the turn is skipped. null disables the
     # timeout; the Arbiter-side deadline of §5.4 arrives in Phase 2.
     timeout_s: 30
 
-  # -------------------------------------------------------- CLI via pexpect --
-  # The universal adapter: anything with a TTY. The command is spawned once
-  # and the session stays open, so the CLI keeps its own history and compacts
-  # its own context.
   - name: claude_sonnet_deep
-    adapter: pexpect
+    wrapper: claude
     role_prompt_file: roles/sceptic.txt
     role_label: sceptic
-    meta: { brand: claude, model: sonnet, effort: deep }
-    command: "claude"
-    # Regex the adapter waits for before considering the CLI ready for input.
-    ready_pattern: '❯ |> '
+    meta: { model: sonnet, effort: deep }
     reply_timeout_s: 180
 
   - name: qwen_coder
-    adapter: pexpect
+    wrapper: qwen-code
     role_prompt_file: roles/pragmatist.txt
     role_label: pragmatist
-    meta: { brand: qwen, model: coder, effort: default }
-    command: "qwen"
-    ready_pattern: '> '
+    meta: { model: coder, effort: default }
     reply_timeout_s: 180
 
-  # ------------------------------------------------- OpenAI-compatible API --
-  # For models with no subscription-backed CLI. The wrapper keeps the history.
-  # api_key_env names an environment variable; keys never live in this file.
-  - name: gateway_devil
-    adapter: api
+  - name: codex_devil
+    wrapper: codex
     role_prompt_file: roles/devils-advocate.txt
     role_label: devil's advocate
-    meta: { brand: openrouter, model: "some/model", effort: default }
-    base_url: https://openrouter.ai/api/v1
-    model: "some/model"
-    api_key_env: OPENROUTER_API_KEY
-    max_output_tokens: 700
-
-# Optional: run a synthesis pass over the transcript when the debate ends.
-# Not a participant — no seat, no turns (§13.4).
-synthesis:
-  enabled: false
-  adapter: api
-  role_prompt_file: roles/synthesist.txt
-  base_url: https://openrouter.ai/api/v1
-  model: "some/model"
-  api_key_env: OPENROUTER_API_KEY
+    meta: { effort: default }
+    reply_timeout_s: 180

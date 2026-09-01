@@ -13,11 +13,15 @@ from pathlib import Path
 import yaml
 
 from .debate import Debate
+from .wrappers import WRAPPER_PRESETS
 
 
 def _load(path: Path) -> dict:
-    with path.open(encoding="utf-8") as fh:
-        config = yaml.safe_load(fh)
+    try:
+        with path.open(encoding="utf-8") as fh:
+            config = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError) as exc:
+        raise SystemExit(f"{path}: {exc}") from exc
     if not isinstance(config, dict) or "participants" not in config:
         raise SystemExit(f"{path}: not a debate configuration")
     return config
@@ -48,6 +52,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     sub.add_parser("roles", help="list the role prompts available in roles/")
+    sub.add_parser("wrappers", help="list built-in participant wrapper presets")
 
     args = parser.parse_args(argv)
 
@@ -59,6 +64,13 @@ def main(argv: list[str] | None = None) -> int:
         for path in sorted(roles_dir.glob("*.txt")):
             first = path.read_text(encoding="utf-8").strip().splitlines()[0]
             print(f"  {path.stem:<20} {first}")
+        return 0
+
+    if args.command == "wrappers":
+        for name, preset in WRAPPER_PRESETS.items():
+            command = preset.get("command") or []
+            executable = f" ({command[0]})" if command else ""
+            print(f"  {name:<24} {preset['adapter']}{executable}")
         return 0
 
     config_path = args.config.resolve()
@@ -73,7 +85,13 @@ def main(argv: list[str] | None = None) -> int:
     # the repository root and `roles/sceptic.txt` just works.
     root = (args.root or Path.cwd()).resolve()
 
-    outcome = Debate(config, root=root).run()
+    try:
+        debate = Debate(config, root=root)
+    except (KeyError, NotImplementedError, OSError, TypeError, ValueError) as exc:
+        print(f"{config_path}: {exc}", file=sys.stderr)
+        return 2
+
+    outcome = debate.run()
     return 0 if outcome in {"FINISHED", "STOPPED_BY_CAP"} else 1
 
 

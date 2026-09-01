@@ -25,6 +25,7 @@ from .base import ParticipantAdapter, TurnResult
 
 class ApiAdapter(ParticipantAdapter):
     needs_end_token = False
+    reports_token_usage = True
 
     def __init__(
         self,

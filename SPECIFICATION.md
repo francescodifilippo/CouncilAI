@@ -67,7 +67,7 @@ Added in v4:
 | `role_visible` configuration flag | A declared council and a blind debate are two different products; the choice changes the dynamics, not the implementation |
 | `topic` as session state, returned in `REG_OK` | A participant joining mid-debate receives no history: without the topic in the protocol it would join with no idea what is being discussed |
 | Cold entry ("fresh eyes") as a normative feature | A participant uncontaminated by the accumulated history is the most effective countermeasure to groupthink, and the moderator's most powerful steering instrument |
-| Mandatory cost cap (`max_rounds` / `max_tokens` / `max_duration`) | The debate continues without the human: nobody is watching the meter, and consumption is continuous |
+| Mandatory cost cap (`max_rounds` / `max_tokens` / `max_seconds`) | The debate continues without the human: nobody is watching the meter, and consumption is continuous |
 | `STOPPED_BY_CAP` outcome distinct from `FINISHED` | A debate halted by the cap is not a concluded debate, and the transcript must say so |
 | Moderator re-entry instruments | Manual steering is the chosen control mechanism: making it cheap on long debates is what makes it practicable |
 | Per-participant repetition detection | A mechanical signal (similarity against a participant's *own* previous turns), not a semantic judgement: it says where to intervene, not whether to stop |
@@ -288,6 +288,8 @@ Planned implementations:
 | `ApiAdapter` | OpenAI-compatible endpoints and multi-model gateways | HTTP response | The wrapper keeps the history. Suited to models with no subscription-backed CLI |
 
 **Selection rule.** The adapter is participant configuration. Where a usable subscription exists via CLI, use `NativeAdapter` if the client supports it, otherwise `PexpectAdapter`. `ApiAdapter` is for models reachable only via API, or for which per-token consumption is the access mode anyway.
+
+**Initial wrapper roster.** The first implementation ships named presets for `claude`, `codex`, `gemini`, `human`, `human-with-web-gui`, `opencode`, `qwen-code`, `kimi`, `glm-code` and `deepseek.coder`. These are configuration data over the shared adapters, not ten adapter subclasses. `glm-code` reuses Claude Code against the Z.AI endpoint. DeepSeek Harness headless cannot resume, so `deepseek.coder` uses the OpenAI-compatible API, whose wrapper-owned history is already the documented `ApiAdapter` behaviour; it does not emulate session continuity by replaying history through a stateless CLI.
 
 **Conformance requirement.** Every new `PexpectAdapter` must pass the checklist in §14.5 before being admitted to a council — in particular the leading-command-character test.
 
