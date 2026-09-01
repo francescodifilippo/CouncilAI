@@ -4,8 +4,16 @@
 
 Consilium seats several AI participants — each running in its own commercial CLI, with its own persistent conversation — and one or more humans around a single table, and has them argue a topic in turns. A central Arbiter hands out turns; each participant keeps its own memory; a human moderator triggers the debate, steers it, and decides when it is over.
 
-> **Status: design specification. No implementation yet.**
-> This repository currently contains the architectural specification and its full evolutionary history. The code is not written. [`SPECIFICATION.md`](SPECIFICATION.md) is normative for the implementation work described in the roadmap below.
+> **Status: early. Phase 0 runs; nothing beyond it exists.**
+> The repository contains the full architectural specification and a working Phase 0 skeleton — one process, no Arbiter, no sockets, no TLS. [`SPECIFICATION.md`](SPECIFICATION.md) is normative for everything further along the roadmap.
+
+### A note on the spirit of this
+
+This started partly as a game. I was curious what would actually happen if you sat several AI CLIs around a table and made them argue — whether anything worth reading would come out of it, or whether they would just be polite at each other for two hundred turns.
+
+The specification ended up more thorough than the idea strictly required, because thinking it through properly turned out to be the enjoyable part. That is also why the design history is kept in full: the reasoning was the point, not just the conclusion.
+
+Phase 0 exists precisely to find out whether the curiosity was justified. If the debates turn out to be boring, that is a result too — and a cheap one to reach.
 
 ---
 
@@ -125,12 +133,55 @@ The experiment that justifies phase 0: run the same topic twice — once with th
 
 ---
 
+## Getting started (Phase 0)
+
+```bash
+git clone https://github.com/francescodifilippo/CouncilAI
+cd CouncilAI
+pip install -e ".[dev]"
+
+cp config/debate.example.yaml config/debate.yaml   # edit topic, seats, roles
+consilium roles                                    # list available role prompts
+consilium run config/debate.yaml
+```
+
+Two runtime dependencies, `pexpect` and `PyYAML`, and it is meant to stay that way — the API adapter uses `urllib` from the standard library on purpose, so adding a model never means adding a dependency.
+
+**Seating a participant.** Each seat picks its own transport:
+
+```yaml
+- name: claude_sonnet_deep
+  adapter: pexpect                        # any CLI with a TTY
+  command: "claude"
+  role_prompt_file: roles/sceptic.txt
+  role_label: sceptic
+
+- name: gateway_devil
+  adapter: api                            # OpenAI-compatible endpoint
+  base_url: https://openrouter.ai/api/v1
+  model: "some/model"
+  api_key_env: OPENROUTER_API_KEY
+  role_prompt_file: roles/devils-advocate.txt
+```
+
+**During your turn** — Phase 0 stands in for the keybindings and the admin plane with a few slash commands, which never reach the debate content: `/status`, `/phase REBUTTAL`, `/inject <text>`, `/away`, `/back`, `/end`. An empty line skips your turn. Phase 2 replaces these with real keybindings and the ADMIN channel.
+
+**The experiment worth running first:** the same topic twice — once with three seats and no roles, once with three roles assigned. Compare the transcripts. That comparison is the whole point of Phase 0.
+
+Transcripts land in `transcripts/` as JSONL, one record per turn, carrying model, effort and role metadata.
+
+---
+
 ## Repository contents
 
 | Path | What it is |
 |---|---|
 | [`SPECIFICATION.md`](SPECIFICATION.md) | The v4 specification. Normative. Includes the full changelog, superseded decisions with rationale, the original v1 document (Appendix A), the version transitions (Appendix B), and the review outcome (Appendix C) |
-| `README.md` | This file |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to argue with the design, and the ground rules for code |
+| `src/consilium/` | Phase 0 implementation: adapters, debate loop, transcript, cap and status |
+| `roles/` | Reusable role prompts — sceptic, pragmatist, devil's advocate, historian, constraint keeper, synthesist |
+| `config/debate.example.yaml` | Annotated example configuration |
+| `tests/` | Phase 0 tests, using a stub adapter so they need no CLI, network or API key |
 
 The specification keeps its own history on purpose. Sections 1.1–1.4 record what changed at each version and why; the appendices record what was tried and dropped. If you are reading the design and something looks like an odd choice, the reason it is that way is usually written down.
 
@@ -147,10 +198,18 @@ Tracked in [`SPECIFICATION.md` §16](SPECIFICATION.md#16-open-implementation-que
 
 ## Naming
 
-*Consilium* — a council convened to advise. Also known during development as **DebateLoop** and **Disputatio**. The name is a reminder of the product objective: a council produces counsel, and a system that produces only a log has not finished its job.
+*Consilium* — a council convened to advise. The name is a reminder of the product objective: a council produces counsel, and a system that produces only a log has not finished its job.
+
+**Consilium** is the project, and the name used throughout the design documents and the code — the Python package, the socket paths, the group and the environment variables all carry it. **CouncilAI** is the repository slug. Earlier in development the project was also called **DebateLoop** and **Disputatio**; those names survive only in the changelog.
 
 ---
 
 ## Contributing
 
 The design is at the stage where argument is more valuable than code. If you disagree with a decision, Appendix C is the place to look first — the finding may already have been raised, accepted, downgraded or rejected, with the reasoning recorded. Issues that engage with that reasoning are welcome.
+
+## License
+
+[GNU General Public License v3.0](LICENSE).
+
+You may use, study, modify and redistribute this work; derivative works must be released under the same licence. Note that this covers Consilium itself — the commercial AI CLIs it orchestrates carry their own terms, and whether a given subscription permits automated orchestration is a question to settle with that provider (see [§16](SPECIFICATION.md#16-open-implementation-questions)).
